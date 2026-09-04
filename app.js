@@ -1075,7 +1075,11 @@ async function resolveImages(list) {
 }
 async function exportPptx() {
   if (!state.slides.length) { say('먼저 슬라이드를 만드세요.', 'warn'); return; }
-  if (typeof PptxGenJS === 'undefined') { say('PPTX 엔진을 불러오지 못했습니다. vendor/pptxgen.bundle.js 를 확인하세요.', 'bad'); return; }
+  if (!libReady()) {
+    checkLib();
+    say('PPTX 엔진 파일이 없습니다. 위쪽 안내 막대에서 파일을 고르거나 vendor/pptxgen.bundle.js 를 함께 올려 주세요.', 'bad');
+    return;
+  }
   say('PPTX를 만드는 중…');
   const pages = buildPages();
   const { cache, bad } = await resolveImages(state.slides.filter(s => s.on));
@@ -1604,7 +1608,49 @@ function readFile(f) {
   fr.readAsText(f, 'utf-8');
 }
 
+/* ═══ 14. PPTX 엔진이 없을 때의 복구 ═════════════════════════════ */
+function libReady() { return typeof PptxGenJS !== 'undefined'; }
+function runLib(code, from) {
+  try {
+    const s = document.createElement('script');
+    s.textContent = code;
+    document.body.appendChild(s);
+  } catch (e) { }
+  if (libReady()) {
+    $('#libWarn').hidden = true;
+    say('PPTX 엔진을 ' + from + '에서 불러왔습니다. 이제 내려받기가 됩니다.', 'ok');
+    return true;
+  }
+  say('그 파일에서는 엔진을 찾지 못했습니다. pptxgen.bundle.js 가 맞는지 확인하세요.', 'bad');
+  return false;
+}
+function checkLib() {
+  const warn = $('#libWarn');
+  if (!warn) return;
+  warn.hidden = libReady();
+  if (libReady()) return;
+  $('#btnLibFile').onclick = () => $('#libFile').click();
+  $('#libFile').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const fr = new FileReader();
+    fr.onload = () => runLib(fr.result, f.name);
+    fr.readAsText(f);
+  };
+  $('#btnLibCdn').onclick = () => {
+    say('인터넷에서 엔진을 받는 중…');
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js';
+    s.onload = () => {
+      $('#libWarn').hidden = libReady();
+      say(libReady() ? 'PPTX 엔진을 받았습니다. 이 탭에서만 유효하니, 저장소에 vendor/pptxgen.bundle.js 를 넣어 두세요.' : '받았지만 엔진이 없습니다.', libReady() ? 'ok' : 'bad');
+    };
+    s.onerror = () => say('인터넷에서 받지 못했습니다. 파일을 직접 골라 주세요.', 'bad');
+    document.body.appendChild(s);
+  };
+}
+
 /* 시작 */
 bind();
+checkLib();
 try { if (localStorage.getItem('df.key') === '1') openApp(); } catch (e) { }
 $('#pw').focus();

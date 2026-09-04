@@ -256,6 +256,16 @@ table.tests td:first-child{font-family:var(--mono);width:56px}
     <button class="tbtn go" id="btnExport">PPTX 내려받기<kbd>Ctrl+S</kbd></button>
   </header>
 
+  <div id="libWarn" hidden style="display:flex;align-items:center;gap:10px;padding:9px 14px;
+       background:#3a2a15;border-bottom:1px solid var(--brass-d);font-size:13px;color:#f0dcb4">
+    <b style="color:var(--brass);font-weight:600">PPTX 엔진 파일이 없습니다</b>
+    <span style="color:#c8b590">index.html 옆에 <code style="font-family:var(--mono)">vendor/pptxgen.bundle.js</code> 가 있어야 내려받기가 됩니다. 미리보기와 편집은 지금도 됩니다.</span>
+    <span class="sp" style="flex:1"></span>
+    <button class="tbtn" id="btnLibFile">파일 직접 고르기</button>
+    <button class="tbtn ghost" id="btnLibCdn">인터넷에서 받기</button>
+    <input type="file" id="libFile" accept=".js" hidden>
+  </div>
+
   <main>
     <!-- 왼쪽: 원본과 분할 규칙 -->
     <div class="col left"><div class="scroll">
@@ -500,7 +510,7 @@ table.tests td:first-child{font-family:var(--mono);width:56px}
     <button class="tbtn" data-close>닫기</button></div>
 </div></div>
 
-<script src="vendor/pptxgen.bundle.js"></script>
+<script src="vendor/pptxgen.bundle.js" onerror="window.__pptxMissing=1"></script>
 <script src="app.js"></script>
 </body>
 </html>
