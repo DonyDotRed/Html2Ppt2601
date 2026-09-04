@@ -65,7 +65,21 @@ async function tryKey() {
 }
 
 /* ═══ 2. 상태 ════════════════════════════════════════════════════ */
-const DIM = { '16x9': { W: 10, H: 5.625 }, '4x3': { W: 10, H: 7.5 } };
+/* 판형 — 단위는 인치 (PowerPoint 한계 56인치 안) */
+const DIM = {
+  '16x9': { W: 10, H: 5.625, name: '와이드 16:9' },
+  '16x10': { W: 10, H: 6.25, name: '16:10' },
+  '4x3': { W: 10, H: 7.5, name: '표준 4:3' },
+  'a4l': { W: 11.69, H: 8.27, name: 'A4 가로' },
+  'a4p': { W: 8.27, H: 11.69, name: 'A4 세로' },
+  'a3p': { W: 11.69, H: 16.54, name: 'A3 세로' },
+  'a2p': { W: 16.54, H: 23.39, name: 'A2 세로', poster: true },
+  'a1p': { W: 23.39, H: 33.11, name: 'A1 세로', poster: true },
+  'a1l': { W: 33.11, H: 23.39, name: 'A1 가로', poster: true },
+  'a0p': { W: 33.11, H: 46.81, name: 'A0 세로', poster: true },
+  'a0l': { W: 46.81, H: 33.11, name: 'A0 가로', poster: true }
+};
+const isPoster = () => !!DIM[state.opts.aspect].poster;
 
 const THEMES = [
   { id: 'reactor', name: '원자로실', bg: '0F1720', fg: 'DCE6F0', title: 'FFFFFF', accent: 'D9A441', muted: '8CA0B4', panel: '1B2836' },
@@ -82,6 +96,8 @@ const state = {
   raw: '',
   slides: [],
   sel: 0,
+  page: 0,
+  poster: { cols: 3, scale: 1, sec: 'bar', merge: true, banner: true },
   imgAR: {},                 // src → 가로/세로 비
   opts: {
     split: 'auto', customSel: '', aspect: '16x9', splitLong: true, firstTitle: true,
@@ -514,7 +530,7 @@ function compose(sl, idx, total) {
 }
 
 function flow(blocks, x0, y0, w0, availH, S, T, layout) {
-  const out = []; const rest = [];
+  const out = []; const rest = []; const GAP = S.gap || 0.13;
   let x = x0, w = w0, y = y0;
   /* 두 단: 그림은 오른쪽 고정 */
   if (layout === 'two') {
@@ -580,6 +596,134 @@ function expandDeck() {
     }
   });
   return out;
+}
+
+/* ═══ 5b. 포스터 조판 (A0·A1·A2) ════════════════════════════════
+   슬라이드 한 장 = 포스터의 한 구역. 구역을 단 안에서 흘려 채웁니다. */
+function composePoster(list) {
+  const D = DIM[state.opts.aspect], W = D.W, H = D.H;
+  const T = state.theme, o = state.opts, M = state.master, PO = state.poster;
+  const u = Math.min(W, H) / 20;             // 판형 기본 단위 (A0 ≈ 1.66인치)
+  const k = u * (PO.scale || 1);             // 글자 배율 (A0 본문 ≈ 28pt)
+  const mx = 0.9 * u, gut = 0.55 * u;
+  const cols = clamp(+PO.cols || 3, 1, 5);
+  const colW = (W - 2 * mx - (cols - 1) * gut) / cols;
+  const footH = ((M.showFoot && M.foot) || M.page) ? 0.62 * k : 0.3 * u;
+  const bottom = H - footH;
+  const secS = (o.bodySize + 5) * k, secPad = 0.16 * k;
+  const S = { body: o.bodySize * k, font: o.font, gap: 0.16 * k, imgMax: (H - 2 * u) * 0.42 };
+  const title = state.deck.title || (list[0] && list[0].title) || '';
+  const sub = state.deck.sub, by = state.deck.by;
+  const logoW = M.logo ? 1.5 * u : 0;
+  const pages = [];
+  let pg = null, ci = 0, y = 0, overflow = 0;
+
+  const banner = () => {
+    const sh = [{ k: 'rect', x: 0, y: 0, w: W, h: H, fill: T.bg }];
+    if (!PO.banner) return { shapes: sh, top: 0.5 * u };
+    const tS = clamp(o.titleSize * k * 2, 24, 130);
+    const tw = W - 2 * mx - (logoW ? logoW + 0.3 * u : 0);
+    const tl = paraLines(asRuns(title), tw, tS);
+    const subS = (o.bodySize + 4) * k, byS = (o.bodySize + 1) * k;
+    const hh = 0.42 * u + tl * lineH(tS) + (sub ? lineH(subS) + 0.1 * u : 0) + (by ? lineH(byS) + 0.06 * u : 0) + 0.42 * u;
+    const fg = onAccent(T.accent);
+    sh.push({ k: 'rect', x: 0, y: 0, w: W, h: hh, fill: T.accent });
+    let ty = 0.42 * u;
+    sh.push({ k: 'text', x: mx, y: ty, w: tw, h: tl * lineH(tS), font: o.font, size: tS, color: fg, bold: true, align: 'left', valign: 'top', paras: [{ runs: asRuns(title), size: tS, bold: true, color: fg }] });
+    ty += tl * lineH(tS) + 0.1 * u;
+    if (sub) { sh.push({ k: 'text', x: mx, y: ty, w: tw, h: lineH(subS), font: o.font, size: subS, color: fg, align: 'left', valign: 'top', paras: [{ runs: asRuns(sub), size: subS, color: fg }] }); ty += lineH(subS) + 0.06 * u; }
+    if (by) sh.push({ k: 'text', x: mx, y: ty, w: tw, h: lineH(byS), font: o.font, size: byS, color: fg, align: 'left', valign: 'top', paras: [{ runs: asRuns(by), size: byS, color: fg }] });
+    if (M.logo) sh.push({ k: 'img', src: M.logo, x: W - mx - logoW, y: 0.42 * u, w: logoW, h: logoW / (M.logoAR || 2.5), logo: true });
+    return { shapes: sh, top: hh + 0.4 * u };
+  };
+  const contHead = () => {
+    const sh = [{ k: 'rect', x: 0, y: 0, w: W, h: H, fill: T.bg }, { k: 'rect', x: 0, y: 0, w: W, h: 0.14 * u, fill: T.accent }];
+    const s = (o.bodySize + 2) * k;
+    sh.push({ k: 'text', x: mx, y: 0.3 * u, w: W - 2 * mx, h: lineH(s), font: o.font, size: s, color: T.muted, align: 'left', valign: 'top', paras: [{ runs: asRuns(title + ' (계속)'), size: s, color: T.muted }] });
+    return { shapes: sh, top: 0.3 * u + lineH(s) + 0.3 * u };
+  };
+  const start = () => {
+    pg = pages.length ? contHead() : banner();
+    pg.secs = []; pg.notes = ''; pg.used = []; pages.push(pg); ci = 0; y = pg.top;
+  };
+  const mark = () => { pg.used[ci] = y; };
+  const colX = () => mx + ci * (colW + gut);
+  const nextCol = () => { ci++; if (ci >= cols) start(); else y = pg.top; };
+
+  const secShapes = (t, x, yy) => {
+    const lines = paraLines(asRuns(t), colW - secPad * 2, secS);
+    const hh = lines * lineH(secS) + secPad * 1.6;
+    const out = [];
+    if (PO.sec === 'bar') {
+      out.push({ k: 'rect', x, y: yy, w: colW, h: hh, fill: T.accent });
+      out.push({ k: 'text', x: x + secPad, y: yy + secPad * .8, w: colW - secPad * 2, h: hh - secPad * 1.6, font: o.font, size: secS, color: onAccent(T.accent), bold: true, align: 'left', valign: 'top', paras: [{ runs: asRuns(t), size: secS, bold: true, color: onAccent(T.accent) }] });
+    } else if (PO.sec === 'box') {
+      out.push({ k: 'rect', x, y: yy, w: colW, h: hh, fill: T.panel });
+      out.push({ k: 'rect', x, y: yy, w: 0.07 * u, h: hh, fill: T.accent });
+      out.push({ k: 'text', x: x + secPad + 0.07 * u, y: yy + secPad * .8, w: colW - secPad * 2 - 0.07 * u, h: hh - secPad * 1.6, font: o.font, size: secS, color: T.title, bold: true, align: 'left', valign: 'top', paras: [{ runs: asRuns(t), size: secS, bold: true, color: T.title }] });
+    } else {
+      out.push({ k: 'text', x, y: yy, w: colW, h: hh - secPad * .6, font: o.font, size: secS, color: T.accent, bold: true, align: 'left', valign: 'top', paras: [{ runs: asRuns(t), size: secS, bold: true, color: T.accent }] });
+      out.push({ k: 'rect', x, y: yy + hh - secPad * .5, w: colW, h: 0.025 * u, fill: T.accent });
+    }
+    return { out, hh };
+  };
+
+  start();
+  list.forEach((sl, si) => {
+    if (!PO.merge && si > 0) start();
+    const items = [];
+    if (sl.title) items.push({ sec: sl.title });
+    if (sl.sub) items.push({ b: { type: 'text', runs: asRuns(sl.sub) } });
+    sl.blocks.forEach(b => items.push({ b }));
+    items.forEach((it, ii) => {
+      if (it.sec) {
+        const probe = secShapes(it.sec, 0, 0);
+        const nb = items[ii + 1];
+        const need = probe.hh + (nb && nb.b ? Math.min(blockHeight(nb.b, colW, S), 1.1 * u) : 0);
+        if (y + need > bottom && !(ci === 0 && y === pg.top)) nextCol();
+        const r = secShapes(it.sec, colX(), y);
+        pg.shapes.push(...r.out);
+        pg.secs.push(sl);
+        y += r.hh + S.gap; mark();
+      } else {
+        const h = blockHeight(it.b, colW, S);
+        if (y + h > bottom + 0.01 && y > pg.top + 0.01) nextCol();
+        if (y + h > bottom + 0.01) overflow++;
+        pg.shapes.push(...blockShapes(it.b, colX(), y, colW, S, T));
+        y += h + S.gap; mark();
+      }
+    });
+    if (sl.notes) pg.notes += (pg.notes ? '\n' : '') + sl.notes;
+  });
+
+  const fS = (o.bodySize - 3) * k;
+  pages.forEach((p, i) => {
+    p.title = title + (pages.length > 1 ? ' · ' + (i + 1) : '');
+    p.over = overflow > 0;
+    const span = bottom - p.top;
+    let used = 0;
+    for (let c = 0; c < cols; c++) used += Math.max(0, (p.used[c] || p.top) - p.top);
+    p.fill = span > 0 ? used / (cols * span) : 1;
+    if (footH <= 0.3 * u) return;
+    p.shapes.push({ k: 'rect', x: mx, y: H - footH + 0.1 * u, w: W - 2 * mx, h: 0.02 * u, fill: mix(T.bg, T.fg, 0.25) });
+    if (M.showFoot && M.foot)
+      p.shapes.push({ k: 'text', x: mx, y: H - footH + 0.2 * u, w: W - 2 * mx - 2 * u, h: lineH(fS), font: o.font, size: fS, color: T.muted, align: 'left', valign: 'top', paras: [{ runs: [{ t: M.foot }], size: fS, color: T.muted }] });
+    if (M.page && pages.length > 1)
+      p.shapes.push({ k: 'text', x: W - mx - 2 * u, y: H - footH + 0.2 * u, w: 2 * u, h: lineH(fS), font: o.font, size: fS, color: T.muted, align: 'right', valign: 'top', paras: [{ runs: [{ t: (i + 1) + ' / ' + pages.length }], size: fS, color: T.muted, align: 'right' }] });
+  });
+  return pages;
+}
+
+/* 판형에 맞는 최종 페이지 목록 */
+function buildPages() {
+  const list = state.slides.filter(s => s.on);
+  if (!list.length) return [];
+  if (isPoster()) return composePoster(list);
+  const deck = expandDeck();
+  return deck.map((sl, i) => {
+    const r = compose(sl, i, deck.length);
+    return { shapes: r.shapes, notes: sl.notes, title: sl.title, over: r.over, secs: [sl] };
+  });
 }
 
 /* ═══ 6. 미리보기 그리기 ═════════════════════════════════════════ */
@@ -658,28 +802,80 @@ function drawShapes(host, shapes, D, px) {
 }
 
 function renderCanvas() {
-  const list = expandDeck();
+  const pages = buildPages();
   const D = DIM[state.opts.aspect];
   const cv = $('#canvas'), wrap = $('#cwrap');
-  $('#emptyMsg').hidden = list.length > 0;
-  cv.hidden = list.length === 0;
-  $('#statN').textContent = list.length;
-  $('#statAR').textContent = state.opts.aspect.replace('x', ':');
+  $('#emptyMsg').hidden = pages.length > 0;
+  cv.hidden = pages.length === 0;
+  $('#statN').textContent = pages.length;
+  $('#statAR').textContent = D.name;
   $('#statImg').textContent = state.slides.reduce((a, s) => a + s.blocks.filter(b => b.type === 'img').length, 0);
-  if (!list.length) { $('#stageT').textContent = '슬라이드 없음'; return; }
+  setPrintSize(D);
+  if (!pages.length) { $('#stageT').textContent = isPoster() ? '포스터 없음' : '슬라이드 없음'; return; }
   state.sel = clamp(state.sel, 0, state.slides.length - 1);
-  const model = state.slides[state.sel];
-  const shown = list.indexOf(model);
-  const i = shown >= 0 ? shown : 0;
-  const r = compose(list[i], i, list.length);
+  let i;
+  if (isPoster()) {
+    const home = pages.findIndex(p => p.secs.indexOf(state.slides[state.sel]) >= 0);
+    if (home >= 0) state.page = home;
+    i = clamp(state.page, 0, pages.length - 1);
+  } else {
+    const home = pages.findIndex(p => p.secs[0] === state.slides[state.sel]);
+    i = home >= 0 ? home : clamp(state.page, 0, pages.length - 1);
+  }
+  state.page = i;
+  const r = pages[i];
   const availW = Math.max(320, wrap.clientWidth - 36);
   const availH = Math.max(200, wrap.clientHeight - 36);
   const px = Math.min(availW / D.W, availH / D.H);
   cv.style.width = (D.W * px) + 'px';
   cv.style.height = (D.H * px) + 'px';
   drawShapes(cv, r.shapes, D, px);
-  $('#stageT').textContent = (i + 1) + ' / ' + list.length + ' · ' + (list[i].title || '제목 없음') +
-    (r.over ? ' · 내용이 넘칩니다' : '');
+  $('#stageT').textContent = (i + 1) + ' / ' + pages.length + ' · ' + (r.title || '제목 없음') +
+    (r.over ? ' · 내용이 넘칩니다' : '') +
+    (isPoster() && r.fill !== undefined && r.fill < 0.55 ? ' · 여백이 많습니다 (배율을 올리거나 단 수를 줄여 보세요)' : '');
+}
+/* 내용이 한 장을 꽉 채우도록 배율을 찾습니다 */
+function posterAutoFit() {
+  if (!isPoster()) { say('포스터 판형에서만 쓸 수 있습니다.', 'warn'); return; }
+  const keepC = state.poster.cols, keepS = state.poster.scale;
+  const cand = [];
+  for (let c = 2; c <= 4; c++) {          // 한 단짜리 포스터는 줄이 너무 길어 제외합니다
+    for (let v = 0.6; v <= 1.601; v += 0.1) {
+      state.poster.cols = c;
+      state.poster.scale = Math.round(v * 100) / 100;
+      const pg = buildPages();
+      if (pg.length !== 1 || pg[0].over) continue;
+      const f = pg[0].fill;
+      cand.push({ c, v: state.poster.scale, f });
+    }
+  }
+  let best = null;
+  cand.forEach(x => { if (!best || x.f > best.f) best = x; });
+  /* 채움률이 비슷하면 단이 많은 쪽이 포스터답습니다 */
+  if (best) cand.forEach(x => { if (x.f >= best.f - 0.08 && x.c > best.c) best = x; });
+  if (best) {
+    state.poster.cols = best.c; state.poster.scale = best.v;
+    syncControls(); refresh();
+    say(best.c + '단 · 배율 ' + best.v.toFixed(2) + '배로 맞췄습니다 (채움 ' + Math.round(best.f * 100) + '%)', 'ok');
+  } else {
+    state.poster.cols = keepC; state.poster.scale = keepS;
+    syncControls(); refresh();
+    say('한 장에 담기지 않습니다. 내용을 줄이거나 더 큰 판형을 쓰세요.', 'warn');
+  }
+}
+
+/* 포스터에서 쪽을 옮기면 그 쪽의 첫 구역을 선택합니다 */
+function jumpToPage() {
+  const pages = buildPages();
+  const p = pages[clamp(state.page, 0, pages.length - 1)];
+  if (p && p.secs && p.secs.length) {
+    const i = state.slides.indexOf(p.secs[0]);
+    if (i >= 0) state.sel = i;
+  }
+}
+function setPrintSize(D) {
+  const s = $('#pageStyle');
+  if (s) s.textContent = '@page{size:' + D.W.toFixed(2) + 'in ' + D.H.toFixed(2) + 'in;margin:0}';
 }
 
 function renderStrip() {
@@ -695,8 +891,15 @@ function renderStrip() {
     c.dataset.i = i;
     const th = document.createElement('div');
     th.className = 'thumb';
-    th.style.height = (D.H * px) + 'px';
-    drawShapes(th, compose(s, i, state.slides.length).shapes, D, px);
+    if (isPoster()) {
+      th.style.cssText = 'height:62px;background:var(--ink3);padding:7px 8px;overflow:hidden';
+      th.innerHTML = '<div style="font-size:11px;color:var(--brass);font-family:var(--mono)">구역 ' + (i + 1) + '</div>' +
+        '<div style="font-size:12px;color:var(--fg);margin-top:2px;line-height:1.35;max-height:32px;overflow:hidden">' +
+        esc(s.title || '제목 없음') + '</div>';
+    } else {
+      th.style.height = (D.H * px) + 'px';
+      drawShapes(th, compose(s, i, state.slides.length).shapes, D, px);
+    }
     const cap = document.createElement('div');
     cap.className = 'cap';
     cap.innerHTML = '<b>' + (i + 1) + '</b><span>' + esc(s.title || (rtext((s.blocks[0] || {}).runs) || '제목 없음').slice(0, 24)) + '</span>';
@@ -874,8 +1077,8 @@ async function exportPptx() {
   if (!state.slides.length) { say('먼저 슬라이드를 만드세요.', 'warn'); return; }
   if (typeof PptxGenJS === 'undefined') { say('PPTX 엔진을 불러오지 못했습니다. vendor/pptxgen.bundle.js 를 확인하세요.', 'bad'); return; }
   say('PPTX를 만드는 중…');
-  const list = expandDeck();
-  const { cache, bad } = await resolveImages(list);
+  const pages = buildPages();
+  const { cache, bad } = await resolveImages(state.slides.filter(s => s.on));
   const D = DIM[state.opts.aspect];
   const P = new PptxGenJS();
   P.defineLayout({ name: 'DF', width: D.W, height: D.H });
@@ -884,8 +1087,7 @@ async function exportPptx() {
   P.author = state.deck.by || '';
   P.company = 'DECK·FORGE';
 
-  list.forEach((sl, i) => {
-    const r = compose(sl, i, list.length);
+  pages.forEach((r, i) => {
     const s = P.addSlide();
     s.background = { color: state.theme.bg };
     r.shapes.forEach(sh => {
@@ -935,11 +1137,11 @@ async function exportPptx() {
         });
       }
     });
-    if (state.exp.notes && sl.notes) s.addNotes(sl.notes);
+    if (state.exp.notes && r.notes) s.addNotes(r.notes);
   });
   try {
     await P.writeFile({ fileName: (state.exp.name || 'deck') + '.pptx' });
-    say('내려받았습니다. 슬라이드 ' + list.length + '장' + (bad ? ' · 그림 ' + bad + '개는 가져오지 못했습니다' : ''), bad ? 'warn' : 'ok');
+    say('내려받았습니다. ' + (isPoster() ? '포스터 ' : '슬라이드 ') + pages.length + '장' + (bad ? ' · 그림 ' + bad + '개는 가져오지 못했습니다' : ''), bad ? 'warn' : 'ok');
   } catch (e) {
     say('PPTX를 만들지 못했습니다: ' + e.message, 'bad');
   }
@@ -947,7 +1149,7 @@ async function exportPptx() {
 
 /* ═══ 9. 저장·복원 ═══════════════════════════════════════════════ */
 function snapshot() {
-  return { v: 1, raw: state.raw, slides: state.slides, opts: state.opts, theme: state.theme, deck: state.deck, master: state.master, exp: state.exp };
+  return { v: 2, raw: state.raw, slides: state.slides, opts: state.opts, theme: state.theme, deck: state.deck, master: state.master, exp: state.exp, poster: state.poster };
 }
 let saveT = null;
 function autosave() {
@@ -968,6 +1170,8 @@ function applySnapshot(d) {
   Object.assign(state.deck, d.deck || {});
   Object.assign(state.master, d.master || {});
   Object.assign(state.exp, d.exp || {});
+  Object.assign(state.poster, d.poster || {});
+  if (!DIM[state.opts.aspect]) state.opts.aspect = '16x9';
   syncControls();
   refresh();
 }
@@ -1028,8 +1232,19 @@ function syncControls() {
   $('#bSize').value = o.bodySize;
   $('#headStyle').value = o.headStyle;
   $('#fontSel').value = o.font;
-  $('#ar169').setAttribute('aria-pressed', o.aspect === '16x9');
-  $('#ar43').setAttribute('aria-pressed', o.aspect === '4x3');
+  $('#pageSize').value = o.aspect;
+  $('#posterPane').hidden = !isPoster();
+  $('#pCols').value = state.poster.cols;
+  $('#pScale').value = state.poster.scale;
+  $('#pSec').value = state.poster.sec;
+  $('#pMerge').checked = state.poster.merge;
+  $('#pBanner').checked = state.poster.banner;
+  if (isPoster()) {
+    const D = DIM[o.aspect];
+    const pk = Math.min(D.W, D.H) / 20 * state.poster.scale;
+    $('#pInfo').textContent = D.name + ' · 본문 ' + Math.round(o.bodySize * pk) + 'pt · 구역제목 ' +
+      Math.round((o.bodySize + 5) * pk) + 'pt · 큰제목 ' + Math.round(o.titleSize * pk * 2) + 'pt';
+  }
   $('#deckTitle').value = state.deck.title;
   $('#deckSub').value = state.deck.sub;
   $('#deckBy').value = state.deck.by;
@@ -1083,6 +1298,32 @@ const SAMPLE = [
   '<pre><code>WORKER  ID     DOSE(mSv)  DATE\nKIM     A-1021  0.42      2026-03-11\nLEE     A-1044  0.18      2026-03-11</code></pre>',
   '<h2>정리</h2>',
   '<p>계획 · 측정 · 기록. 세 가지가 지켜지면 대부분의 사고는 예방됩니다.</p>'
+].join('\n');
+
+
+/* 포스터 판형에서 쓰는 예제 */
+const SAMPLE_POSTER = [
+  '<h1>작업자 실시간 선량 관리 체계의 현장 적용</h1>',
+  '<h2>배경 및 목적</h2>',
+  '<p>정기 정비 기간 중 고선량 구역 작업은 계획선량과 실제선량의 차이가 크다. 본 연구는 실시간 선량 전송과 구역별 선량률 지도를 결합해 작업 중 의사결정을 지원하는 체계를 시험 적용하고 그 효과를 평가하였다.</p>',
+  '<ul><li>계획선량 대비 실제선량 편차 축소</li><li>고선량 구역 체류시간 단축</li><li>작업 중단 없이 관리자 개입 가능성 확인</li></ul>',
+  '<h2>방법</h2>',
+  '<p>2개 호기 정비 공정 12건, 연인원 340명을 대상으로 6개월간 적용하였다. 개인선량계 실시간 전송값을 30초 간격으로 수집하고, 구역별 기준선량률과 비교해 임계값 초과 시 현장 단말에 경보를 보냈다.</p>',
+  '<ol><li>작업 전 구역 선량률 측정 및 지도 작성</li><li>공정별 계획선량 산정</li><li>작업 중 실시간 수집 및 경보</li><li>작업 후 편차 분석과 다음 공정 반영</li></ol>',
+  '<h2>결과</h2>',
+  '<table><thead><tr><th>구분</th><th>적용 전</th><th>적용 후</th><th>변화</th></tr></thead>',
+  '<tbody><tr><td>계획 대비 편차</td><td>28 %</td><td>11 %</td><td>-17 %p</td></tr>',
+  '<tr><td>공정당 집단선량</td><td>4.6 man·mSv</td><td>3.4 man·mSv</td><td>-26 %</td></tr>',
+  '<tr><td>고선량 구역 체류</td><td>42 분</td><td>29 분</td><td>-31 %</td></tr>',
+  '<tr><td>경보 후 조치 시간</td><td>-</td><td>1.8 분</td><td>-</td></tr></tbody></table>',
+  '<p>편차 축소 효과는 선량률 구배가 큰 구역에서 두드러졌으며, 동일 공정을 반복할수록 계획 정확도가 개선되었다.</p>',
+  '<h2>고찰</h2>',
+  '<blockquote>측정값이 작업자에게 즉시 보이는 것만으로도 체류시간이 줄었다.<cite>현장 관찰</cite></blockquote>',
+  '<p>경보 자체보다 선량률 지도의 사전 공유가 행동 변화에 더 크게 기여한 것으로 보인다. 다만 금속 구조물이 밀집한 구역에서는 전송 지연이 관측되어 보완이 필요하다.</p>',
+  '<h2>결론</h2>',
+  '<ul><li>계획 대비 편차 28 %에서 11 %로 감소</li><li>공정당 집단선량 26 % 저감</li><li>전송 지연 구간의 중계기 보강이 다음 과제</li></ul>',
+  '<h2>참고문헌</h2>',
+  '<p>1. ICRP Publication 103 (2007). 2. IAEA GSR Part 3 (2014). 3. 원자력안전위원회 고시 제2024-XX호.</p>'
 ].join('\n');
 
 /* ═══ 12. 자체 검증 ══════════════════════════════════════════════ */
@@ -1157,6 +1398,37 @@ async function runTests() {
     state.opts.headStyle = keep;
     return bad === 0 || bad + '개 이탈';
   });
+  t('A0 포스터가 한 장으로 조판된다', () => {
+    const keep = state.opts.aspect, ks = state.slides;
+    state.opts.aspect = 'a0p';
+    state.slides = parseSource(SAMPLE, Object.assign({}, O, { split: 'auto', firstTitle: false }));
+    const pg = buildPages();
+    const D = DIM.a0p; let bad = 0;
+    pg.forEach(p => p.shapes.forEach(sh => {
+      if (sh.x < -0.01 || sh.y < -0.01 || sh.x + sh.w > D.W + 0.01 || sh.y + sh.h > D.H + 0.5) bad++;
+    }));
+    const n = pg.length;
+    state.opts.aspect = keep; state.slides = ks;
+    return (n === 1 && bad === 0) || ('쪽=' + n + ' 이탈=' + bad);
+  });
+  t('포스터 단 수를 바꾸면 배치가 달라진다', () => {
+    const keep = state.opts.aspect, ks = state.slides, kc = state.poster.cols;
+    state.opts.aspect = 'a0p';
+    state.slides = parseSource(SAMPLE, Object.assign({}, O, { split: 'auto', firstTitle: false }));
+    state.poster.cols = 2; const x2 = buildPages()[0].shapes.map(s => (s.x + s.w).toFixed(2)).join();
+    state.poster.cols = 4; const x4 = buildPages()[0].shapes.map(s => (s.x + s.w).toFixed(2)).join();
+    state.poster.cols = kc; state.opts.aspect = keep; state.slides = ks;
+    return x2 !== x4 || '단 수가 반영되지 않음';
+  });
+  t('포스터 글자가 판형에 맞게 커진다', () => {
+    const keep = state.opts.aspect, ks = state.slides;
+    state.opts.aspect = 'a0p';
+    state.slides = parseSource(SAMPLE, Object.assign({}, O, { split: 'auto', firstTitle: false }));
+    const sizes = buildPages()[0].shapes.filter(s => s.k === 'text').map(s => s.size);
+    const small = Math.min.apply(null, sizes), big = Math.max.apply(null, sizes);
+    state.opts.aspect = keep; state.slides = ks;
+    return (small > 18 && big > 70) || ('가장 작은 글자 ' + small.toFixed(0) + 'pt · 가장 큰 글자 ' + big.toFixed(0) + 'pt');
+  });
   t('테마 색이 모두 정상 형식이다', () => {
     const bad = THEMES.filter(x => ['bg', 'fg', 'title', 'accent', 'muted', 'panel'].some(k => !/^[0-9A-F]{6}$/.test(x[k])));
     return bad.length === 0 || bad.map(b => b.id).join(',');
@@ -1199,7 +1471,11 @@ function bind() {
   $$('[data-close]').forEach(b => b.onclick = () => $$('.modal').forEach(m => m.classList.remove('on')));
   $$('.modal').forEach(m => m.onclick = e => { if (e.target === m) m.classList.remove('on'); });
 
-  $('#btnSample').onclick = () => { $('#src').value = SAMPLE; state.raw = SAMPLE; state.deck.title = ''; build(); };
+  $('#btnSample').onclick = () => {
+    const src = isPoster() ? SAMPLE_POSTER : SAMPLE;
+    $('#src').value = src; state.raw = src; state.deck.title = ''; state.deck.sub = ''; build();
+    if (isPoster()) { state.deck.sub = '한국수력원자력 방사선안전부'; state.deck.by = '홍길동, 김철수, 이영희'; posterAutoFit(); }
+  };
   $('#btnClear').onclick = () => { $('#src').value = ''; state.raw = ''; state.slides = []; refresh(); say('비웠습니다.'); };
   $('#btnPaste').onclick = async () => {
     try { const t = await navigator.clipboard.readText(); $('#src').value = t; state.raw = t; build(); }
@@ -1235,8 +1511,19 @@ function bind() {
   $('#bSize').oninput = e => { O.bodySize = +e.target.value || 17; softRefresh(); };
   $('#headStyle').onchange = e => { O.headStyle = e.target.value; refresh(); };
   $('#fontSel').onchange = e => { O.font = e.target.value; state.theme.font = e.target.value; refresh(); };
-  $('#ar169').onclick = () => { O.aspect = '16x9'; syncControls(); refresh(); };
-  $('#ar43').onclick = () => { O.aspect = '4x3'; syncControls(); refresh(); };
+  $('#pageSize').onchange = e => {
+    O.aspect = e.target.value; state.page = 0;
+    if (isPoster() && state.opts.bodySize > 24) state.opts.bodySize = 17;
+    syncControls(); refresh();
+    say(DIM[O.aspect].name + ' 판형으로 바꿨습니다' + (isPoster() ? ' · 오른쪽에서 단 수와 배율을 조절하세요' : ''));
+  };
+  const PO = state.poster;
+  $('#pCols').onchange = e => { PO.cols = +e.target.value; refresh(); };
+  $('#pScale').oninput = e => { PO.scale = clamp(+e.target.value || 1, 0.5, 2); syncControls(); softRefresh(); };
+  $('#pSec').onchange = e => { PO.sec = e.target.value; refresh(); };
+  $('#pMerge').onchange = e => { PO.merge = e.target.checked; refresh(); };
+  $('#pBanner').onchange = e => { PO.banner = e.target.checked; refresh(); };
+  $('#pFit').onclick = posterAutoFit;
 
   $('#cAccent').oninput = e => { state.theme.accent = hex(e.target.value); state.theme.id = 'custom'; softRefresh(); };
   $('#cBg').oninput = e => { state.theme.bg = hex(e.target.value); state.theme.id = 'custom'; softRefresh(); };
@@ -1280,8 +1567,16 @@ function bind() {
     fr.readAsText(f);
   };
 
-  $('#btnPrev').onclick = () => { state.sel = Math.max(0, state.sel - 1); refresh(); };
-  $('#btnNext').onclick = () => { state.sel = Math.min(state.slides.length - 1, state.sel + 1); refresh(); };
+  $('#btnPrev').onclick = () => {
+    if (isPoster()) { state.page = Math.max(0, state.page - 1); jumpToPage(); }
+    else state.sel = Math.max(0, state.sel - 1);
+    refresh();
+  };
+  $('#btnNext').onclick = () => {
+    if (isPoster()) { state.page = Math.min(buildPages().length - 1, state.page + 1); jumpToPage(); }
+    else state.sel = Math.min(state.slides.length - 1, state.sel + 1);
+    refresh();
+  };
 
   document.addEventListener('keydown', e => {
     if ($('#gate').classList.contains('hide') === false) return;
