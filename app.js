@@ -1378,10 +1378,11 @@ async function runTests() {
   });
   t('내용이 넘치면 다음 장으로 넘어간다', () => {
     const long = '<h1>긴 장</h1>' + Array(40).fill('<p>이 문단은 넘침 처리를 확인하기 위한 충분히 긴 본문입니다.</p>').join('');
-    const keep = state.slides;
+    const keep = state.slides, keepA = state.opts.aspect;
+    state.opts.aspect = '16x9';                     // 슬라이드 판형에서 확인합니다
     state.slides = parseSource(long, Object.assign({}, O, { split: 'h1', firstTitle: false }));
     const n = expandDeck().length;
-    state.slides = keep;
+    state.slides = keep; state.opts.aspect = keepA;
     return n > 1 || '나뉘지 않음(' + n + ')';
   });
   t('마크다운 중첩 목록의 단계가 유지된다', () => {
