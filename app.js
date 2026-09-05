@@ -1627,8 +1627,10 @@ function runLib(code, from) {
 function checkLib() {
   const warn = $('#libWarn');
   if (!warn) return;
-  warn.hidden = libReady();
-  if (libReady()) return;
+  if (libReady()) { warn.hidden = true; return; }
+  if (!window.__pptxDone) { warn.hidden = true; setTimeout(checkLib, 250); return; }  // 아직 찾는 중
+  warn.hidden = false;
+  console.log('DECK·FORGE — 엔진을 찾지 못했습니다. 시도한 위치:', (window.__pptxTried || []).join(', '));
   $('#btnLibFile').onclick = () => $('#libFile').click();
   $('#libFile').onchange = e => {
     const f = e.target.files[0]; if (!f) return;

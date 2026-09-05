@@ -259,7 +259,7 @@ table.tests td:first-child{font-family:var(--mono);width:56px}
   <div id="libWarn" hidden style="display:flex;align-items:center;gap:10px;padding:9px 14px;
        background:#3a2a15;border-bottom:1px solid var(--brass-d);font-size:13px;color:#f0dcb4">
     <b style="color:var(--brass);font-weight:600">PPTX 엔진 파일이 없습니다</b>
-    <span style="color:#c8b590">index.html 옆에 <code style="font-family:var(--mono)">vendor/pptxgen.bundle.js</code> 가 있어야 내려받기가 됩니다. 미리보기와 편집은 지금도 됩니다.</span>
+    <span style="color:#c8b590"><code style="font-family:var(--mono)">pptxgen.bundle.js</code> 를 index.html 과 같은 폴더나 <code style="font-family:var(--mono)">vendor/</code> 안에 두세요. 미리보기와 편집은 지금도 됩니다.</span>
     <span class="sp" style="flex:1"></span>
     <button class="tbtn" id="btnLibFile">파일 직접 고르기</button>
     <button class="tbtn ghost" id="btnLibCdn">인터넷에서 받기</button>
@@ -510,7 +510,31 @@ table.tests td:first-child{font-family:var(--mono);width:56px}
     <button class="tbtn" data-close>닫기</button></div>
 </div></div>
 
-<script src="vendor/pptxgen.bundle.js" onerror="window.__pptxMissing=1"></script>
+<!--PPTX_LOADER_START-->
+<script>
+/* 엔진 파일을 흔히 두는 위치들을 차례로 시도합니다 */
+window.__pptxPaths = [
+  'vendor/pptxgen.bundle.js', 'pptxgen.bundle.js',
+  'vendor/pptxgen.min.js', 'pptxgen.min.js',
+  'lib/pptxgen.bundle.js', 'js/pptxgen.bundle.js', 'assets/pptxgen.bundle.js'
+];
+(function () {
+  var i = 0;
+  function done() { window.__pptxDone = true; if (window.checkLib) window.checkLib(); }
+  function next() {
+    if (typeof PptxGenJS !== 'undefined') return done();
+    if (i >= window.__pptxPaths.length) return done();
+    var el = document.createElement('script');
+    window.__pptxTried = (window.__pptxTried || []).concat(window.__pptxPaths[i]);
+    el.src = window.__pptxPaths[i++];
+    el.onload = next; el.onerror = next;
+    document.head.appendChild(el);
+  }
+  next();
+  setTimeout(done, 4000);   // 어떤 브라우저는 실패를 알려주지 않습니다
+})();
+</script>
+<!--PPTX_LOADER_END-->
 <script src="app.js"></script>
 </body>
 </html>
