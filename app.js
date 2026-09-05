@@ -2,6 +2,9 @@
    외부 통신 없음. 모든 처리는 브라우저 안에서 끝납니다. */
 'use strict';
 
+const DECKFORGE_VERSION = '2.0.0-stable';
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
 /* ═══ 0. 기본 도구 ═══════════════════════════════════════════════ */
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => [...(r || document).querySelectorAll(s)];
@@ -1052,15 +1055,35 @@ function blockEditor(s, b, bi) {
 /* ═══ 8. PPTX 내보내기 ═══════════════════════════════════════════ */
 async function toDataURL(src) {
   if (!src) return null;
-  if (/^data:/.test(src)) return src;
-  const res = await fetch(src, { mode: 'cors' });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const blob = await res.blob();
-  return await new Promise((ok, no) => {
-    const fr = new FileReader();
-    fr.onload = () => ok(fr.result); fr.onerror = () => no(new Error('read'));
-    fr.readAsDataURL(blob);
-  });
+  if (/^data:/i.test(src)) return src;
+  // 외부 이미지가 CORS/네트워크 문제로 영원히 대기하는 것을 막습니다.
+  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ac ? setTimeout(() => ac.abort(), 12000) : null;
+  try {
+    const res = await fetch(src, { mode: 'cors', credentials: 'omit', signal: ac ? ac.signal : undefined });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    return await new Promise((ok, no) => {
+      const fr = new FileReader();
+      fr.onload = () => ok(fr.result);
+      fr.onerror = () => no(new Error('이미지를 읽지 못했습니다'));
+      fr.readAsDataURL(blob);
+    });
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('이미지 불러오기 시간 초과');
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+function downloadBlob(blob, fileName) {
+  const safe = String(fileName || 'deck.pptx').replace(/[\/:*?"<>|]+/g, '_');
+  const typed = blob && blob.type === PPTX_MIME ? blob : new Blob([blob], { type: PPTX_MIME });
+  const url = URL.createObjectURL(typed);
+  const a = document.createElement('a');
+  a.href = url; a.download = safe; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 15000);
 }
 async function resolveImages(list) {
   const cache = {}; let bad = 0;
@@ -1084,7 +1107,9 @@ async function exportPptx() {
   const pages = buildPages();
   const { cache, bad } = await resolveImages(state.slides.filter(s => s.on));
   const D = DIM[state.opts.aspect];
-  const P = new PptxGenJS();
+  const PptxCtor = getPptxCtor();
+  if (!PptxCtor) { say('PPTX 엔진 초기화에 실패했습니다.', 'bad'); return; }
+  const P = new PptxCtor();
   P.defineLayout({ name: 'DF', width: D.W, height: D.H });
   P.layout = 'DF';
   P.title = state.deck.title || state.exp.name;
@@ -1133,7 +1158,7 @@ async function exportPptx() {
           text: c.t,
           options: (sh.header && ri === 0)
             ? { bold: true, color: sh.headText, fill: { color: sh.head } }
-            : { color: sh.color, fill: { color: ri % 2 ? sh.zebra : 'FFFFFF00' } }
+            : { color: sh.color, fill: { color: ri % 2 ? sh.zebra : state.theme.bg } }
         })));
         s.addTable(rows, {
           x: sh.x, y: sh.y, w: sh.w, colW: Array(sh.rows[0].length).fill(sh.w / sh.rows[0].length),
@@ -1144,8 +1169,10 @@ async function exportPptx() {
     if (state.exp.notes && r.notes) s.addNotes(r.notes);
   });
   try {
-    await P.writeFile({ fileName: (state.exp.name || 'deck') + '.pptx' });
-    say('내려받았습니다. ' + (isPoster() ? '포스터 ' : '슬라이드 ') + pages.length + '장' + (bad ? ' · 그림 ' + bad + '개는 가져오지 못했습니다' : ''), bad ? 'warn' : 'ok');
+    const blob = await P.write({ outputType: 'blob' });
+    if (!blob || blob.size < 2000) throw new Error('생성된 PPTX 데이터가 비정상적으로 작습니다.');
+    downloadBlob(blob, (state.exp.name || 'deck') + '.pptx');
+    say('내려받았습니다. ' + (isPoster() ? '포스터 ' : '슬라이드 ') + pages.length + '장' + (bad ? ' · 그림 ' + bad + '개는 CORS/네트워크 문제로 제외됨' : ''), bad ? 'warn' : 'ok');
   } catch (e) {
     say('PPTX를 만들지 못했습니다: ' + e.message, 'bad');
   }
@@ -1378,11 +1405,10 @@ async function runTests() {
   });
   t('내용이 넘치면 다음 장으로 넘어간다', () => {
     const long = '<h1>긴 장</h1>' + Array(40).fill('<p>이 문단은 넘침 처리를 확인하기 위한 충분히 긴 본문입니다.</p>').join('');
-    const keep = state.slides, keepA = state.opts.aspect;
-    state.opts.aspect = '16x9';                     // 슬라이드 판형에서 확인합니다
+    const keep = state.slides;
     state.slides = parseSource(long, Object.assign({}, O, { split: 'h1', firstTitle: false }));
     const n = expandDeck().length;
-    state.slides = keep; state.opts.aspect = keepA;
+    state.slides = keep;
     return n > 1 || '나뉘지 않음(' + n + ')';
   });
   t('마크다운 중첩 목록의 단계가 유지된다', () => {
@@ -1439,13 +1465,16 @@ async function runTests() {
     return bad.length === 0 || bad.map(b => b.id).join(',');
   });
   t('열쇠말 검사가 동작한다', () => (fnv('redpass') === KEY_FNV) || 'FNV 불일치');
-  t('PPTX 엔진이 준비되어 있다', () => (typeof PptxGenJS !== 'undefined') || 'pptxgen 로드 실패');
+  t('표 셀 색상은 6자리 RGB만 사용한다', () => !/FFFFFF00/.test(exportPptx.toString()) || '8자리 ARGB 사용');
+  t('PPTX 엔진이 준비되어 있다', () => libReady() || 'pptxgen 로드 실패');
 
   // 실제 파일 생성까지 확인
   let genNote = '';
   let genOk = false;
   try {
-    const P = new PptxGenJS();
+    const C = getPptxCtor();
+    if (!C) throw new Error('PPTX 엔진 없음');
+    const P = new C();
     P.defineLayout({ name: 'T', width: 10, height: 5.625 }); P.layout = 'T';
     const s = P.addSlide();
     s.addText([{ text: '검증', options: { fontSize: 20 } }], { x: 1, y: 1, w: 6, h: 1 });
@@ -1610,7 +1639,19 @@ function readFile(f) {
 }
 
 /* ═══ 14. PPTX 엔진이 없을 때의 복구 ═════════════════════════════ */
-function libReady() { return typeof PptxGenJS !== 'undefined'; }
+function getPptxCtor() {
+  const C = (typeof globalThis !== 'undefined' && globalThis.PptxGenJS) ||
+            (typeof window !== 'undefined' && window.PptxGenJS);
+  return typeof C === 'function' ? C : null;
+}
+function libReady() {
+  const C = getPptxCtor();
+  if (!C) return false;
+  try {
+    const p = new C();
+    return !!p && typeof p.addSlide === 'function' && typeof p.write === 'function';
+  } catch (e) { return false; }
+}
 function runLib(code, from) {
   try {
     const s = document.createElement('script');
@@ -1628,10 +1669,8 @@ function runLib(code, from) {
 function checkLib() {
   const warn = $('#libWarn');
   if (!warn) return;
-  if (libReady()) { warn.hidden = true; return; }
-  if (!window.__pptxDone) { warn.hidden = true; setTimeout(checkLib, 250); return; }  // 아직 찾는 중
-  warn.hidden = false;
-  console.log('DECK·FORGE — 엔진을 찾지 못했습니다. 시도한 위치:', (window.__pptxTried || []).join(', '));
+  warn.hidden = libReady();
+  if (libReady()) return;
   $('#btnLibFile').onclick = () => $('#libFile').click();
   $('#libFile').onchange = e => {
     const f = e.target.files[0]; if (!f) return;
@@ -1653,6 +1692,17 @@ function checkLib() {
 }
 
 /* 시작 */
+window.addEventListener('error', e => {
+  const msg = e && e.message ? e.message : '알 수 없는 JavaScript 오류';
+  try { say('오류: ' + msg, 'bad'); } catch (_) { }
+  console.error('[DECK·FORGE]', e.error || e);
+});
+window.addEventListener('unhandledrejection', e => {
+  const r = e && e.reason;
+  const msg = r && r.message ? r.message : String(r || '처리되지 않은 Promise 오류');
+  try { say('오류: ' + msg, 'bad'); } catch (_) { }
+  console.error('[DECK·FORGE Promise]', r);
+});
 bind();
 checkLib();
 try { if (localStorage.getItem('df.key') === '1') openApp(); } catch (e) { }
